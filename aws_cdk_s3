@@ -1,0 +1,81 @@
+from aws_cdk import core
+from aws_cdk.aws_s3 import (
+    BlockPublicAccess,
+    Bucket,
+    BucketAccessControl,
+    EventType,
+    LambdaDestination,
+    BucketEncryption,
+)
+
+class S3LogCollector(core.Construct):
+    def __init__(self, scope: core.Construct, id: str, props) -> None:
+        super().__init__(scope, id)
+
+        # Create S3 bucket with customizable options
+        self.bucket = Bucket(
+            self,
+            "S3LogCollector",
+            bucket_name=props["bucket_name"],
+            versioned=props.get("versioned", True),
+            removal_policy=core.RemovalPolicy.DESTROY,  # Only for testing purposes
+            public_read_access=props.get("public_read_access", False),
+            block_public_access=BlockPublicAccess.BLOCK_ALL if props.get("public_read_access", False) else BlockPublicAccess.BLOCK_ACLS,
+            encryption=BucketEncryption.KMS if props.get("encryption", False) else BucketEncryption.UNENCRYPTED,
+        )
+
+        # Enable server access logs if specified
+        if props.get("enable_logging", False):
+            self.bucket.add_cors_rule(
+                allowed_methods=["GET", "HEAD"],
+                allowed_origins=["*"],
+                allowed_headers=["*"],
+                max_age=3000,
+            )
+
+            Bucket(
+                self,
+                "AccessLogsBucket",
+                bucket_name=f"{props['bucket_name']}-logs",
+                removal_policy=core.RemovalPolicy.DESTROY,  # Only for testing purposes
+            )
+
+        # Configure event notifications if specified
+        event_notifications = props.get("event_notifications", [])
+        for event, lambda_function in event_notifications:
+            self.bucket.add_event_notification(event, LambdaDestination(lambda_function))
+
+        # Apply tags to the S3 bucket if specified
+        tags = props.get("tags", {})
+        for key, value in tags.items():
+            core.Tag.add(self.bucket, key, value)
+
+# Example usage in a CDK stack
+class MyS3BucketStack(core.Stack):
+    def __init__(self, scope: core.Construct, id: str, **kwargs) -> None:
+        super().__init__(scope, id, **kwargs)
+
+        my_bucket = S3LogCollector(
+            self,
+            "MyS3BucketWithEvents",
+            bucket_name="my-s3-bucket-with-events",
+            enable_logging=True,
+            versioned=True,
+            public_read_access=True,
+            event_notifications=[
+                (EventType.OBJECT_CREATED, "MyLambdaFunctionExportedName"),
+                # Add more event notifications as needed
+            ],
+            tags={
+                "environment": "production",
+                "department": "engineering",
+            },
+        )
+
+        # Example usage of the add_event_notification method
+        my_bucket.add_event_notification(EventType.OBJECT_REMOVED, "AnotherLambdaFunctionExportedName")
+
+app = core.App()
+MyS3BucketStack(app, "MyS3BucketStack")
+app.synth()
+
